@@ -1,4 +1,4 @@
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder, Result};
+use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use dotenv::dotenv;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,7 @@ async fn main() -> io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(conn.clone()))
+            .app_data(web::Data::new(env::var("RAPID_API_KEY").unwrap()))
             .service(index)
     })
     .bind(("127.0.0.1", 8080))?
@@ -73,7 +74,20 @@ async fn main() -> io::Result<()> {
 }
 
 #[get("/")]
-async fn index(request: web::Query<Request>, conn: web::Data<MySqlPool>) -> Result<impl Responder> {
+async fn index(
+    query: web::Query<Request>,
+    request: HttpRequest,
+    conn: web::Data<MySqlPool>,
+    api_key: web::Data<String>,
+) -> Result<impl Responder> {
+    if request
+        .headers()
+        .get("X-RapidAPI-Proxy-Secret")
+        .map_or(true, |h| h != api_key.as_str())
+    {
+        return Ok(HttpResponse::Unauthorized().finish());
+    }
+
     let response = web::block(|| async move {
         sqlx::query(
             "SELECT
@@ -87,8 +101,8 @@ async fn index(request: web::Query<Request>, conn: web::Data<MySqlPool>) -> Resu
             LIMIT 200 OFFSET ?
             ",
         )
-        .bind(&request.q)
-        .bind(request.page.unwrap_or(0) * 200)
+        .bind(&query.q)
+        .bind(query.page.unwrap_or(0) * 200)
         .fetch_all(&**conn)
         .await
         .unwrap()
